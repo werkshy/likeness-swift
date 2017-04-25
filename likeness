@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# Bash strict mode
+set -euo pipefail
+
+swift build && .build/debug/Likeness $*
