@@ -18,17 +18,20 @@ import Foundation
 
 import Dispatch
 
-let inputs = ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+let inputs = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z" ]
 
-func work(_ input: String) -> (String) {
-    // TODO add random sleep
-    let sleepTime = randomInt32(max: 10000)
+// Our dumb random-sleeper work function
+func randomSleep(_ input: String) -> (String) {
+    let sleepTime = randomInt32(500000)
     print("Worker '\(input)' sleeping \(sleepTime)")
     usleep(sleepTime)
+    print("Worker '\(input)' complete")
     return input;
 }
 
-func randomInt32(max: Int) -> UInt32 {
+// Random helper function (seems like Darwin and Linux have different options)
+func randomInt32(_ max: Int) -> UInt32 {
 #if os(Linux)
     return UInt32(random() % max)
 #else
@@ -36,26 +39,96 @@ func randomInt32(max: Int) -> UInt32 {
 #endif
 }
 
-let concurrentQueue = DispatchQueue(label: "concurrentQueue", qos: .utility, attributes: .concurrent)
-let serialQueue = DispatchQueue(label: "serialQueue")
-let maxConcurrency = 2
-let semaphore = DispatchSemaphore(value: maxConcurrency)
-let group = DispatchGroup()
+// Task - minimal interface for doing work with a typed result.
+class Task<T> {
+    var block : () -> T
+    init(_ block : @escaping () -> T) {
+        self.block = block
+    }
 
-for input in inputs {
-    serialQueue.async {
-        semaphore.wait()
-
-        concurrentQueue.async(group: group) {
-            let result = work(input)
-            print("Got result: " + result)
-            semaphore.signal()
-        }
+    func perform() -> T {
+        return block()
     }
 }
 
-print("Finished queuing")
+class WorkerPool<T> {
+    var results : Array<T> = Array<T>()
 
-group.wait()
+    // Serial queue that uses the semaphore to throttle how much concurrency we
+    // have in the concurrent queue.
+    let serialQueue = DispatchQueue(label: "serialQueue")
+    // Semaphore that is used to provide the throttling
+    let semaphore : DispatchSemaphore
 
-print ("Group finished")
+    // Concurrent queue where we actually run our tasks
+    let concurrentQueue = DispatchQueue(
+        label: "concurrentQueue",
+        qos: .utility,
+        attributes: .concurrent
+    )
+
+    // Queue to synchronize access to our results array
+    let resultsManipulatorQueue = DispatchQueue(label: "resultsQueue")
+
+    // group we can use to tell when all our background tasks are done.
+    let group = DispatchGroup()
+
+    init(maxConcurrency: Int = 4) {
+        self.semaphore = DispatchSemaphore(value: maxConcurrency)
+    }
+
+    // Run a list of tasks in the background
+    func go(_ tasks : Array<Task<T>>) {
+        for task in tasks {
+            serialQueue.async(group: group) {
+                self.semaphore.wait() // wait until there is a free semaphore
+
+                self.concurrentQueue.async(group: self.group) {
+                    let result = task.perform()
+                    self.addResult(result)
+                    self.semaphore.signal() // release our semaphore
+                }
+            }
+        }
+        print("Finished queuing")
+    }
+
+
+    // Wait for all jobs to finish and return the array
+    func getResults() -> Array<T> {
+        wait()
+        return resultsManipulatorQueue.sync {
+            return self.results
+        }
+    }
+
+    // Append a result to the results queue in a threadsafe manner.
+    func addResult(_ result: T) {
+        resultsManipulatorQueue.async {
+            self.results.append(result)
+        }
+    }
+
+    func wait() {
+        self.group.wait()
+    }
+}
+
+let pool = WorkerPool<String>()
+
+// Build a list of tasks
+let tasks = inputs.map { (value: String) -> Task<String> in
+    return Task<String>{ randomSleep(value) }
+}
+
+// Feed the tasks to the worker pool
+pool.go(tasks)
+
+// Wait and retrieve results
+let results = pool.getResults()
+print("\(results.count) results: \(results)")
+
+print("All done")
+
+
+
