@@ -39,17 +39,6 @@ func randomInt32(_ max: Int) -> UInt32 {
 #endif
 }
 
-// Task - minimal interface for doing work with a typed result.
-class Task<T> {
-    var block : () -> T
-    init(_ block : @escaping () -> T) {
-        self.block = block
-    }
-
-    func perform() -> T {
-        return block()
-    }
-}
 
 class WorkerPool<T> {
     var results : Array<T> = Array<T>()
@@ -77,14 +66,14 @@ class WorkerPool<T> {
         self.semaphore = DispatchSemaphore(value: maxConcurrency)
     }
 
-    // Run a list of tasks in the background
-    func go(_ tasks : Array<Task<T>>) {
+    // run a list of tasks (closures that return type T) in the background
+    func go(_ tasks : Array< () -> T >) {
         for task in tasks {
             serialQueue.async(group: group) {
                 self.semaphore.wait() // wait until there is a free semaphore
 
                 self.concurrentQueue.async(group: self.group) {
-                    let result = task.perform()
+                    let result = task()
                     self.addResult(result)
                     self.semaphore.signal() // release our semaphore
                 }
@@ -114,11 +103,13 @@ class WorkerPool<T> {
     }
 }
 
+// Define a pool that will have return type of String
 let pool = WorkerPool<String>()
 
-// Build a list of tasks
-let tasks = inputs.map { (value: String) -> Task<String> in
-    return Task<String>{ randomSleep(value) }
+
+// Build a list of tasks (closures that return String)
+let tasks = inputs.map { (value: String) -> (() -> String) in
+    return { randomSleep(value) }
 }
 
 // Feed the tasks to the worker pool
